@@ -191,6 +191,7 @@ if __name__ == "__main__":
         os.makedirs(OUTPUT_DIR)
         print(f"Dossier de sortie créé: {OUTPUT_DIR}")
 
+    """
     # 1. Obtenir les URLs des sitemaps depuis l'index
     sitemap_urls = get_sitemap_urls(SITEMAP_INDEX_URL, headers)
 
@@ -204,10 +205,13 @@ if __name__ == "__main__":
     if not article_urls:
         print("Aucune URL d'article valide trouvée dans les sitemaps.")
         exit()
-
+    """
+    article_urls = ["https://minecraft.wiki/w/Egg#Brown", "https://minecraft.wiki/w/Ender_Pearl"]
     print(f"\nDébut du scraping de {len(article_urls)} articles...")
     processed_count = 0
     error_count = 0
+
+
 
     # 3. Boucle de scraping pour chaque URL d'article
     for i, url in enumerate(article_urls):
