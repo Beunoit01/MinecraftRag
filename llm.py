@@ -15,6 +15,8 @@ COLLECTION_NAME = "climate_facts_chunks"
 MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
 NUM_RESULTS_TO_RETRIEVE = 7  # Augmenter pour un contexte plus riche pour l'analyse
 PDF_PATH = "climate_articles.pdf"  # Chemin vers votre PDF d'articles
+# NOUVEAU: Dossier pour sauvegarder les analyses
+ANALYSIS_OUTPUT_DIR = "analysis_results"
 
 # --- Configuration du LLM Local (llama-cpp-python) ---
 # *** MODIFICATION: Mise à jour pour Llama 3 ***
@@ -130,7 +132,6 @@ def analyze_article(article: dict):
     if not llm_model:
         return "Analyse impossible: le LLM n'a pas été chargé."
 
-    # 1. Créer un embedding pour le contenu de l'article (titre + début) pour la recherche
     search_query = article['title'] + "\n" + " ".join(article['text'].split()[:100])
     print("  -> Recherche de contexte scientifique pertinent dans ChromaDB...")
     try:
@@ -152,7 +153,6 @@ def analyze_article(article: dict):
         print(f"  -> Erreur lors de la recherche: {e}")
         return "Impossible d'accéder aux sources scientifiques (erreur base de données)."
 
-    # 2. Construire le prompt pour le LLM (MODIFIÉ POUR LE FORMAT LLAMA 3)
     system_prompt = """You are a meticulous and impartial climate science fact-checker. Your mission is to analyze the 'ARTICLE TO ANALYZE' and determine its credibility by comparing its claims against the provided 'SCIENTIFIC CONTEXT'. Base your entire analysis ONLY on the provided context. Do not use any external knowledge.
 
 Your output must be structured in the following format:
@@ -181,14 +181,12 @@ Provide your fact-check analysis based on the instructions."""
 
     print("  -> L'IA analyse l'article... (cela peut prendre un moment)")
 
-    # 3. Générer l'analyse avec le LLM
     try:
         output = llm_model(
             prompt,
             max_tokens=800,
-            # MODIFICATION: Utiliser le stop token de Llama 3
             stop=["<|eot_id|>", "<|end_of_text|>"],
-            temperature=0.1,  # Très déterministe pour le fact-checking
+            temperature=0.1,
             echo=False
         )
         analysis = output['choices'][0]['text'].strip()
@@ -199,10 +197,27 @@ Provide your fact-check analysis based on the instructions."""
         return "Erreur lors de la génération de la réponse par l'IA."
 
 
+# NOUVELLE FONCTION POUR SAUVEGARDER LES RÉSULTATS
+def save_analysis_to_file(filename: str, content: str):
+    """
+    Sauvegarde le contenu de l'analyse dans un fichier texte.
+    """
+    if not os.path.exists(ANALYSIS_OUTPUT_DIR):
+        os.makedirs(ANALYSIS_OUTPUT_DIR)
+        print(f"Dossier '{ANALYSIS_OUTPUT_DIR}' créé.")
+
+    filepath = os.path.join(ANALYSIS_OUTPUT_DIR, filename)
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"\n✅ Analyse sauvegardée avec succès dans: {filepath}")
+    except Exception as e:
+        print(f"\n❌ Erreur lors de la sauvegarde du fichier: {e}")
+
+
 # --- Boucle Principale Modifiée ---
 
 if __name__ == "__main__":
-    # Charger les articles une seule fois au démarrage
     articles = load_and_split_articles(PDF_PATH)
 
     if not articles:
@@ -211,17 +226,38 @@ if __name__ == "__main__":
 
     while True:
         print("\n" + "=" * 60)
-        print("📰 LISTE DES ARTICLES DISPONIBLES")
+        print("📰 MENU DE FACT-CHECKING")
         print("=" * 60)
         for article in articles:
             print(f"  {article['number']}: {article['title']}")
+        print("-" * 60)
+        print("  'all': Analyser TOUS les articles et sauvegarder le résultat.")
         print("=" * 60)
-        print("Entrez le numéro de l'article à analyser, ou 'quit' pour quitter.")
+        print("Entrez le numéro de l'article à analyser, 'all', ou 'quit'.")
 
         user_input = input("\nVotre choix: ")
 
         if user_input.lower() in ['quit', 'exit']:
             break
+
+        # --- NOUVELLE LOGIQUE POUR ANALYSER TOUS LES ARTICLES ---
+        if user_input.lower() == 'all':
+            all_results = []
+            print("\n--- Lancement de l'analyse de tous les articles ---")
+            for article in articles:
+                analysis_result = analyze_article(article)
+
+                header = f"""
+############################################################
+# 🔎 RÉSULTAT DE L'ANALYSE - ARTICLE {article['number']}: {article['title']}
+############################################################
+"""
+                all_results.append(header + analysis_result)
+
+            # Combiner et sauvegarder
+            full_report = "\n\n".join(all_results)
+            save_analysis_to_file("fact_check_report_all_articles.txt", full_report)
+            continue  # Revenir au menu principal
 
         try:
             choice = int(user_input)
@@ -229,16 +265,26 @@ if __name__ == "__main__":
 
             if selected_article:
                 analysis_result = analyze_article(selected_article)
-                print("\n" + "#" * 60)
-                print(f"🔎 RÉSULTAT DE L'ANALYSE - ARTICLE {selected_article['number']}")
-                print("#" * 60)
+                header = f"🔎 RÉSULTAT DE L'ANALYSE - ARTICLE {selected_article['number']}: {selected_article['title']}"
+
+                print("\n" + "#" * len(header))
+                print(header)
+                print("#" * len(header))
                 print(analysis_result)
-                print("#" * 60)
+                print("#" * len(header))
+
+                # Demander si l'utilisateur veut sauvegarder
+                save_choice = input("\nSauvegarder cette analyse dans un fichier ? (o/n): ").lower()
+                if save_choice == 'o' or save_choice == 'y':
+                    filename = f"analyse_article_{selected_article['number']}.txt"
+                    # Créer le contenu formaté pour le fichier
+                    file_content = f"{header}\n\n{analysis_result}"
+                    save_analysis_to_file(filename, file_content)
             else:
                 print(f"Erreur: Le numéro d'article '{choice}' n'est pas valide.")
 
         except ValueError:
-            print("Erreur: Veuillez entrer un numéro valide.")
+            print("Erreur: Veuillez entrer un numéro valide ou 'all'.")
         except Exception as e:
             print(f"Une erreur inattendue est survenue: {e}")
 
