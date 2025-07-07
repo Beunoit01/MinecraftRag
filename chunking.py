@@ -4,7 +4,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # --- Configuration ---
 # Chemin vers le dossier contenant les fichiers .txt scrapés
-INPUT_DIR = "climate_facts_content_from_pdfs" # Dossier avec les PDFs extraits
+INPUT_DIR = "climate_facts_content" # Dossier avec les PDFs extraits
 # Fichier de sortie pour sauvegarder les chunks
 OUTPUT_CHUNKS_FILE = "climate_chunks_data.json"
 # Paramètres pour le découpage (à ajuster selon vos besoins)

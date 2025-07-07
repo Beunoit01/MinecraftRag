@@ -2,14 +2,15 @@
 """
 Script spécialisé pour scraper les sources scientifiques climatiques
 Sources: IPCC, Environmental Defense Fund, et autres sources fiables
+Version modifiée pour nettoyer le texte pour un système RAG.
 """
 
 import requests
 from bs4 import BeautifulSoup
 import time
 import os
-import re
-from urllib.parse import urlparse, urljoin, urlunparse
+import re  # <-- NOUVEAU: Importation du module pour les expressions régulières
+from urllib.parse import urlparse
 import logging
 
 # Configuration du logging
@@ -50,11 +51,54 @@ CLIMATE_SOURCES = {
     }
 }
 
+
+# --- NOUVELLE FONCTION DE NETTOYAGE ---
+def clean_rag_text(text):
+    """
+    Nettoie le texte brut pour le rendre plus adapté à un système RAG.
+    Supprime les éléments non pertinents comme les références de figures, les citations, etc.
+    """
+    # Liste de motifs regex à supprimer.
+    # Chaque tuple contient le motif et par quoi le remplacer (ici, une chaîne vide).
+    patterns_to_remove = [
+        # Supprimer les lignes commençant par "Figure", "Table", "Box", "FAQ" etc.
+        # Ex: "Figure 1.1 | The structure of the AR6 WGI Report."
+        (r'^(Figure|Table|Box|FAQ|Cross-Chapter Box|Cross-Working Group Box)[\s\d.A-Za-z,|:]+.*$', ''),
+        # Supprimer les références entre accolades
+        # Ex: "{1.2.1, 1.3, Box 1.2, Appendix 1.A}"
+        (r'\{[^{}]+\}', ''),
+        # Supprimer les lignes de navigation et de méta-informations
+        # Ex: "Open figure", "View", "Downloads", "Copy doi"
+        (
+        r'^(Open section|Downloads|Authors|Figures|How to cite|Expand all sections|View|Open figure|Copy|doi|Share on .*|Share via .*|Read more|Explore more)$',
+        ''),
+        # Supprimer les listes d'auteurs et d'éditeurs
+        (
+        r'^(Coordinatin g Lead Authors:|Lead Authors:|Contri buting Authors:|Review Editors:|Chapter Scientists:|Contributing Authors:).*$',
+        ''),
+        # Supprimer les instructions de citation
+        (r'^This chapter should be cited as:.*$', ''),
+        # Supprimer les lignes de notes de bas de page numérotées (souvent courtes)
+        (r'^\d+\s+.{,100}$', ''),
+        # Supprimer les lignes contenant seulement des pieds de page ou des en-têtes répétitifs
+        (r'^(Executive Summary|Technical Summary|Summary for Policymakers|Frequently Asked Questions)$', ''),
+    ]
+
+    for pattern, replacement in patterns_to_remove:
+        text = re.sub(pattern, replacement, text, flags=re.MULTILINE | re.IGNORECASE)
+
+    # Supprimer les sauts de ligne excessifs (plus de 2 consécutifs)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
+
+
 def create_output_directory():
     """Crée le dossier de sortie s'il n'existe pas."""
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
         logger.info(f"Dossier créé: {OUTPUT_DIR}")
+
 
 def clean_filename(filename):
     """Nettoie le nom de fichier pour le système de fichiers."""
@@ -64,6 +108,7 @@ def clean_filename(filename):
     if len(filename) > 200:
         filename = filename[:200]
     return filename
+
 
 def extract_text_content(soup):
     """Extrait le contenu textuel principal d'une page."""
@@ -79,14 +124,23 @@ def extract_text_content(soup):
     else:
         # Fallback: prendre tout le body
         body = soup.find('body')
-        if body:
-            text = body.get_text(separator='\n', strip=True)
-        else:
-            text = soup.get_text(separator='\n', strip=True)
-    
-    # Nettoyer le texte
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
-    return '\n'.join(lines)
+        text = body.get_text(separator='\n', strip=True) if body else soup.get_text(separator='\n', strip=True)
+
+    # --- ÉTAPE DE NETTOYAGE MODIFIÉE ---
+
+    # 1. Appliquer le nettoyage regex spécifique au RAG
+    cleaned_text = clean_rag_text(text)
+
+    # 2. Nettoyage final des lignes
+    final_lines = []
+    for line in cleaned_text.split('\n'):
+        stripped_line = line.strip()
+        # Conserver uniquement les lignes qui contiennent du texte significatif
+        if stripped_line and len(stripped_line) > 25:  # Augmenter le seuil pour être plus strict
+            final_lines.append(stripped_line)
+
+    return '\n'.join(final_lines)
+
 
 def scrape_url(url, source_name):
     """Scrape une URL spécifique."""
@@ -138,6 +192,7 @@ def scrape_url(url, source_name):
     except Exception as e:
         logger.error(f"Erreur lors du scraping de {url}: {e}")
         return False
+
 
 def main():
     """Fonction principale."""
