@@ -13,13 +13,12 @@ import fitz  # PyMuPDF
 PERSIST_DIRECTORY = "chroma_db_climate_facts"
 COLLECTION_NAME = "climate_facts_chunks"
 MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
-NUM_RESULTS_TO_RETRIEVE = 7  # Augmenter pour un contexte plus riche pour l'analyse
-PDF_PATH = "climate_articles.pdf"  # Chemin vers votre PDF d'articles
-# NOUVEAU: Dossier pour sauvegarder les analyses
-ANALYSIS_OUTPUT_DIR = "analysis_results"
+NUM_RESULTS_TO_RETRIEVE = 7
+PDF_PATH = "climate_articles.pdf"
+# MODIFIÉ: Dossier pour sauvegarder les analyses
+ANALYSIS_OUTPUT_DIR = "result"
 
-# --- Configuration du LLM Local (llama-cpp-python) ---
-# *** MODIFICATION: Mise à jour pour Llama 3 ***
+# --- Configuration du LLM Local (Llama 3) ---
 MODEL_PATH = "/home/benoit_v/Documents/models/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"
 
 # Mettre 0 pour utiliser uniquement le CPU
@@ -47,11 +46,7 @@ print(f"\n2. Connexion à la base de données vectorielle ChromaDB...")
 collection = None
 try:
     client = chromadb.PersistentClient(path=PERSIST_DIRECTORY)
-
-    collection = client.get_collection(
-        name=COLLECTION_NAME
-    )
-
+    collection = client.get_collection(name=COLLECTION_NAME)
     print(f"   -> Connecté à la collection '{COLLECTION_NAME}' ({collection.count()} documents).")
 except Exception as e:
     print(f"   Erreur critique lors de la connexion à ChromaDB: {e}")
@@ -70,7 +65,7 @@ else:
             n_gpu_layers=N_GPU_LAYERS,
             n_ctx=N_CTX,
             n_batch=N_BATCH,
-            verbose=False  # Moins de logs de llama.cpp
+            verbose=False
         )
         print("   -> Modèle LLM local chargé avec succès.")
     except Exception as e:
@@ -80,29 +75,24 @@ else:
 print("\n--- Initialisation terminée ---")
 
 
-# --- NOUVELLES FONCTIONS ---
+# --- FONCTIONS ---
 
 def load_and_split_articles(pdf_path: str) -> list[dict]:
-    """
-    Charge un PDF, extrait le texte et le sépare en articles numérotés.
-    """
+    """Charge un PDF, extrait le texte et le sépare en articles numérotés."""
     articles = []
     if not os.path.exists(pdf_path):
         print(f"Erreur: Le fichier PDF '{pdf_path}' n'a pas été trouvé.")
         return articles
-
     try:
         doc = fitz.open(pdf_path)
         full_text = ""
         for page in doc:
             full_text += page.get_text()
         doc.close()
-
+        # Regex pour trouver les articles commençant par un numéro suivi de ":"
         raw_articles = re.split(r'\n(\d+):\s', full_text)
-
-        if raw_articles[0].strip() == "Climate Articles":
+        if raw_articles[0].strip().lower() == "climate articles":
             raw_articles.pop(0)
-
         i = 0
         while i < len(raw_articles) - 1:
             num = raw_articles[i]
@@ -114,7 +104,6 @@ def load_and_split_articles(pdf_path: str) -> list[dict]:
                 "text": content.strip()
             })
             i += 2
-
         print(f"\n{len(articles)} articles chargés depuis le PDF.")
         return articles
     except Exception as e:
@@ -123,20 +112,14 @@ def load_and_split_articles(pdf_path: str) -> list[dict]:
 
 
 def analyze_article(article: dict):
-    """
-    Analyse un article pour déterminer sa crédibilité en le comparant
-    aux sources scientifiques fiables de la base de données vectorielle.
-    """
+    """Analyse un article pour déterminer sa crédibilité."""
     print(f"\nAnalyse de l'article n°{article['number']}: '{article['title']}'")
-
     if not llm_model:
         return "Analyse impossible: le LLM n'a pas été chargé."
-
     search_query = article['title'] + "\n" + " ".join(article['text'].split()[:100])
     print("  -> Recherche de contexte scientifique pertinent dans ChromaDB...")
     try:
         query_embedding = embedding_model.encode(search_query, device=device_embed).tolist()
-
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=NUM_RESULTS_TO_RETRIEVE,
@@ -145,10 +128,8 @@ def analyze_article(article: dict):
         context_chunks = results.get('documents', [[]])[0]
         if not context_chunks:
             return "❓ **INFORMATION INSUFFISANTE** - Aucune source scientifique fiable trouvée pour évaluer cet article."
-
         context_string = "\n\n---\n\n".join(context_chunks)
         print(f"  -> {len(context_chunks)} extraits de contexte scientifique trouvés.")
-
     except Exception as e:
         print(f"  -> Erreur lors de la recherche: {e}")
         return "Impossible d'accéder aux sources scientifiques (erreur base de données)."
@@ -160,7 +141,6 @@ Your output must be structured in the following format:
 2.  **CONFIDENCE:** [High / Medium / Low]
 3.  **ARTICLE SUMMARY:** [Briefly summarize the main argument of the article in 2-3 sentences.]
 4.  **FACT-CHECK ANALYSIS:** [Provide a point-by-point analysis. Compare the article's claims to the provided scientific context. If the article is misleading or false, explain exactly why, citing the scientific context.]"""
-
     user_prompt = f"""**SCIENTIFIC CONTEXT:**
 ---
 {context_string}
@@ -171,16 +151,13 @@ Your output must be structured in the following format:
 ---
 
 Provide your fact-check analysis based on the instructions."""
-
     prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
 {system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
 
 {user_prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
-
     print("  -> L'IA analyse l'article... (cela peut prendre un moment)")
-
     try:
         output = llm_model(
             prompt,
@@ -191,21 +168,16 @@ Provide your fact-check analysis based on the instructions."""
         )
         analysis = output['choices'][0]['text'].strip()
         return analysis
-
     except Exception as e:
         print(f"  -> Erreur lors de l'analyse par l'IA: {e}")
         return "Erreur lors de la génération de la réponse par l'IA."
 
 
-# NOUVELLE FONCTION POUR SAUVEGARDER LES RÉSULTATS
 def save_analysis_to_file(filename: str, content: str):
-    """
-    Sauvegarde le contenu de l'analyse dans un fichier texte.
-    """
+    """Sauvegarde le contenu de l'analyse dans un fichier texte."""
     if not os.path.exists(ANALYSIS_OUTPUT_DIR):
         os.makedirs(ANALYSIS_OUTPUT_DIR)
         print(f"Dossier '{ANALYSIS_OUTPUT_DIR}' créé.")
-
     filepath = os.path.join(ANALYSIS_OUTPUT_DIR, filename)
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -216,10 +188,8 @@ def save_analysis_to_file(filename: str, content: str):
 
 
 # --- Boucle Principale Modifiée ---
-
 if __name__ == "__main__":
     articles = load_and_split_articles(PDF_PATH)
-
     if not articles:
         print("Impossible de continuer sans articles à analyser. Fin du programme.")
         exit()
@@ -231,7 +201,7 @@ if __name__ == "__main__":
         for article in articles:
             print(f"  {article['number']}: {article['title']}")
         print("-" * 60)
-        print("  'all': Analyser TOUS les articles et sauvegarder le résultat.")
+        print("  'all': Analyser TOUS les articles et sauvegarder les résultats.")
         print("=" * 60)
         print("Entrez le numéro de l'article à analyser, 'all', ou 'quit'.")
 
@@ -242,21 +212,24 @@ if __name__ == "__main__":
 
         # --- NOUVELLE LOGIQUE POUR ANALYSER TOUS LES ARTICLES ---
         if user_input.lower() == 'all':
-            all_results = []
             print("\n--- Lancement de l'analyse de tous les articles ---")
             for article in articles:
                 analysis_result = analyze_article(article)
+                header = f"🔎 RÉSULTAT DE L'ANALYSE - ARTICLE {article['number']}: {article['title']}"
 
-                header = f"""
-############################################################
-# 🔎 RÉSULTAT DE L'ANALYSE - ARTICLE {article['number']}: {article['title']}
-############################################################
-"""
-                all_results.append(header + analysis_result)
+                # Afficher le résultat dans la console
+                print("\n" + "#" * len(header))
+                print(header)
+                print("#" * len(header))
+                print(analysis_result)
+                print("#" * len(header))
 
-            # Combiner et sauvegarder
-            full_report = "\n\n".join(all_results)
-            save_analysis_to_file("fact_check_report_all_articles.txt", full_report)
+                # Sauvegarder automatiquement le fichier pour chaque article
+                filename = f"analyse_article_{article['number']}.txt"
+                file_content = f"{header}\n\n{analysis_result}"
+                save_analysis_to_file(filename, file_content)
+
+            print("\n--- Analyse de tous les articles terminée. ---")
             continue  # Revenir au menu principal
 
         try:
@@ -273,13 +246,10 @@ if __name__ == "__main__":
                 print(analysis_result)
                 print("#" * len(header))
 
-                # Demander si l'utilisateur veut sauvegarder
-                save_choice = input("\nSauvegarder cette analyse dans un fichier ? (o/n): ").lower()
-                if save_choice == 'o' or save_choice == 'y':
-                    filename = f"analyse_article_{selected_article['number']}.txt"
-                    # Créer le contenu formaté pour le fichier
-                    file_content = f"{header}\n\n{analysis_result}"
-                    save_analysis_to_file(filename, file_content)
+                # Sauvegarder automatiquement le fichier
+                filename = f"analyse_article_{selected_article['number']}.txt"
+                file_content = f"{header}\n\n{analysis_result}"
+                save_analysis_to_file(filename, file_content)
             else:
                 print(f"Erreur: Le numéro d'article '{choice}' n'est pas valide.")
 
