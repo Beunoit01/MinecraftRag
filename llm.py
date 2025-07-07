@@ -1,68 +1,66 @@
 import os
-import json
+import re
 import chromadb
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
 import torch
 # Importation nécessaire pour le LLM local
 from llama_cpp import Llama
+# NOUVELLE IMPORTATION pour lire les PDFs
+import fitz  # PyMuPDF
 
 # --- Configuration ---
-# Chemin vers le dossier de la base ChromaDB persistante
 PERSIST_DIRECTORY = "chroma_db_climate_facts"
-# Nom de la collection dans ChromaDB
 COLLECTION_NAME = "climate_facts_chunks"
-# Nom du modèle d'embedding (DOIT être le même que celui utilisé pour créer les embeddings)
 MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
-# Nombre de chunks pertinents à récupérer de ChromaDB
-NUM_RESULTS_TO_RETRIEVE = 5 # Plus de contexte pour l'analyse des fake news
+NUM_RESULTS_TO_RETRIEVE = 7  # Augmenter pour un contexte plus riche pour l'analyse
+PDF_PATH = "climate_articles.pdf"  # Chemin vers votre PDF d'articles
 
 # --- Configuration du LLM Local (llama-cpp-python) ---
-# *** MODIFIEZ CECI: Chemin vers votre fichier modèle GGUF téléchargé ***
-MODEL_PATH = "/home/benoitv/Documents/Software/Phi-3-mini-4k-instruct-q4.gguf" # EXEMPLE: "/home/user/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+# *** MODIFICATION: Mise à jour pour Llama 3 ***
+MODEL_PATH = "/home/benoit_v/Documents/models/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"
 
-# Paramètres pour llama-cpp-python
-N_GPU_LAYERS = 30   # Nombre de couches à décharger sur le GPU.
-                    # À AJUSTER pour votre RTX 3060 Ti 8GB !
-                    # Commencez vers 30-35 pour un modèle 7B Q4/Q5.
-                    # Si vous avez des erreurs "CUDA out of memory", réduisez cette valeur.
-                    # Si c'est trop lent, essayez d'augmenter (si la VRAM le permet).
-                    # Mettre 0 pour utiliser uniquement le CPU (très lent).
-N_CTX = 2048        # Taille maximale du contexte (tokens) que le modèle peut gérer.
-                    # Vérifiez la taille supportée par le modèle GGUF choisi. 2048 est souvent sûr.
-N_BATCH = 512       # Taille du batch pour le traitement du prompt (peut influencer la VRAM).
+# Mettre 0 pour utiliser uniquement le CPU
+N_GPU_LAYERS = 0
+N_CTX = 8192  # Llama 3 supporte un contexte plus large
+N_BATCH = 512
 
-# --- Initialisation du Modèle d'Embedding (inchangé) ---
-print(f"\nChargement du modèle d'embedding local: '{MODEL_NAME}'")
+# --- Initialisation des modèles et de la base de données ---
+print("--- Initialisation du système de Fact-Checking ---")
+
+# Initialisation du Modèle d'Embedding
+print(f"\n1. Chargement du modèle d'embedding: '{MODEL_NAME}'")
+embedding_model = None
 try:
-    device_embed = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Utilisation du périphérique pour l'embedding: {device_embed.upper()}")
+    device_embed = 'cuda' if torch.cuda.is_available() and N_GPU_LAYERS > 0 else 'cpu'
+    print(f"   Utilisation du périphérique pour l'embedding: {device_embed.upper()}")
     embedding_model = SentenceTransformer(MODEL_NAME, device=device_embed)
-    print("Modèle d'embedding chargé.")
+    print("   -> Modèle d'embedding chargé.")
 except Exception as e:
-    print(f"Erreur critique lors du chargement du modèle d'embedding: {e}")
+    print(f"   Erreur critique lors du chargement du modèle d'embedding: {e}")
     exit()
 
-# --- Initialisation de ChromaDB (inchangé) ---
-print(f"\nConnexion à la base de données ChromaDB persistante: '{PERSIST_DIRECTORY}'")
+# Initialisation de ChromaDB
+print(f"\n2. Connexion à la base de données vectorielle ChromaDB...")
+collection = None
 try:
     client = chromadb.PersistentClient(path=PERSIST_DIRECTORY)
-    default_ef = embedding_functions.DefaultEmbeddingFunction() # Juste pour obtenir la collection
+
     collection = client.get_collection(
-        name=COLLECTION_NAME,
-        embedding_function=default_ef
+        name=COLLECTION_NAME
     )
-    print(f"Connecté à la collection '{COLLECTION_NAME}' contenant {collection.count()} éléments.")
+
+    print(f"   -> Connecté à la collection '{COLLECTION_NAME}' ({collection.count()} documents).")
 except Exception as e:
-    print(f"Erreur critique lors de la connexion à ChromaDB ou à la collection: {e}")
+    print(f"   Erreur critique lors de la connexion à ChromaDB: {e}")
     exit()
 
-# --- Initialisation du LLM Local ---
-print(f"\nChargement du LLM local depuis: '{MODEL_PATH}'")
-llm_model = None # Initialiser à None
+# Initialisation du LLM Local
+print(f"\n3. Chargement du Large Language Model (LLM) local...")
+llm_model = None
 if not os.path.exists(MODEL_PATH):
-    print(f"Erreur: Le fichier modèle GGUF '{MODEL_PATH}' n'a pas été trouvé.")
-    print("Veuillez vérifier le chemin dans la configuration MODEL_PATH.")
+    print(f"   Erreur: Fichier modèle GGUF non trouvé à '{MODEL_PATH}'.")
+    print("   Le script fonctionnera sans l'analyse IA.")
 else:
     try:
         llm_model = Llama(
@@ -70,238 +68,178 @@ else:
             n_gpu_layers=N_GPU_LAYERS,
             n_ctx=N_CTX,
             n_batch=N_BATCH,
-            verbose=True # Mettre à False pour moins de messages de llama.cpp
+            verbose=False  # Moins de logs de llama.cpp
         )
-        print("Modèle LLM local chargé avec succès.")
+        print("   -> Modèle LLM local chargé avec succès.")
     except Exception as e:
-        print(f"Erreur lors du chargement du modèle LLM local: {e}")
-        print("Vérifiez le chemin du modèle, les paramètres (n_gpu_layers) et l'installation de llama-cpp-python avec support GPU.")
-        # Le script continuera sans LLM si le chargement échoue
+        print(f"   Erreur lors du chargement du LLM local: {e}")
+        print("   Vérifiez le chemin du modèle et les paramètres. Le script continuera sans IA.")
 
-def analyze_climate_claim(claim: str):
-    """
-    Analyse une affirmation sur le climat pour détecter les fake news.
-    Retourne une évaluation basée sur les sources scientifiques fiables.
-    """
-    print(f"\nAnalyse de l'affirmation: '{claim}'")
+print("\n--- Initialisation terminée ---")
 
-    # 1. Créer l'embedding de l'affirmation
-    print("  -> Création de l'embedding pour l'affirmation...")
+
+# --- NOUVELLES FONCTIONS ---
+
+def load_and_split_articles(pdf_path: str) -> list[dict]:
+    """
+    Charge un PDF, extrait le texte et le sépare en articles numérotés.
+    """
+    articles = []
+    if not os.path.exists(pdf_path):
+        print(f"Erreur: Le fichier PDF '{pdf_path}' n'a pas été trouvé.")
+        return articles
+
     try:
-        claim_embedding = embedding_model.encode(claim, device=device_embed).tolist()
-        print("  -> Embedding de l'affirmation créé.")
+        doc = fitz.open(pdf_path)
+        full_text = ""
+        for page in doc:
+            full_text += page.get_text()
+        doc.close()
+
+        raw_articles = re.split(r'\n(\d+):\s', full_text)
+
+        if raw_articles[0].strip() == "Climate Articles":
+            raw_articles.pop(0)
+
+        i = 0
+        while i < len(raw_articles) - 1:
+            num = raw_articles[i]
+            content = raw_articles[i + 1]
+            title = content.split('\n')[0].strip()
+            articles.append({
+                "number": int(num),
+                "title": title,
+                "text": content.strip()
+            })
+            i += 2
+
+        print(f"\n{len(articles)} articles chargés depuis le PDF.")
+        return articles
     except Exception as e:
-        print(f"  -> Erreur lors de la création de l'embedding: {e}")
-        return "Impossible d'analyser cette affirmation (erreur technique)."
+        print(f"Erreur lors de la lecture du PDF: {e}")
+        return []
 
-    # 2. Rechercher dans les sources scientifiques fiables
-    print(f"  -> Recherche dans les sources scientifiques fiables...")
+
+def analyze_article(article: dict):
+    """
+    Analyse un article pour déterminer sa crédibilité en le comparant
+    aux sources scientifiques fiables de la base de données vectorielle.
+    """
+    print(f"\nAnalyse de l'article n°{article['number']}: '{article['title']}'")
+
+    if not llm_model:
+        return "Analyse impossible: le LLM n'a pas été chargé."
+
+    # 1. Créer un embedding pour le contenu de l'article (titre + début) pour la recherche
+    search_query = article['title'] + "\n" + " ".join(article['text'].split()[:100])
+    print("  -> Recherche de contexte scientifique pertinent dans ChromaDB...")
     try:
+        query_embedding = embedding_model.encode(search_query, device=device_embed).tolist()
+
         results = collection.query(
-            query_embeddings=[claim_embedding],
+            query_embeddings=[query_embedding],
             n_results=NUM_RESULTS_TO_RETRIEVE,
-            include=['documents', 'metadatas', 'distances']
+            include=['documents']
         )
-        print(f"  -> Trouvé {len(results.get('ids', [[]])[0])} source(s) pertinente(s).")
+        context_chunks = results.get('documents', [[]])[0]
+        if not context_chunks:
+            return "❓ **INFORMATION INSUFFISANTE** - Aucune source scientifique fiable trouvée pour évaluer cet article."
+
+        context_string = "\n\n---\n\n".join(context_chunks)
+        print(f"  -> {len(context_chunks)} extraits de contexte scientifique trouvés.")
+
     except Exception as e:
         print(f"  -> Erreur lors de la recherche: {e}")
         return "Impossible d'accéder aux sources scientifiques (erreur base de données)."
 
-    context_chunks = results.get('documents', [[]])[0]
-    if not context_chunks:
-        return "❓ **INFORMATION INSUFFISANTE** - Aucune source scientifique fiable trouvée pour évaluer cette affirmation."
+    # 2. Construire le prompt pour le LLM (MODIFIÉ POUR LE FORMAT LLAMA 3)
+    system_prompt = """You are a meticulous and impartial climate science fact-checker. Your mission is to analyze the 'ARTICLE TO ANALYZE' and determine its credibility by comparing its claims against the provided 'SCIENTIFIC CONTEXT'. Base your entire analysis ONLY on the provided context. Do not use any external knowledge.
 
-    sources = [meta.get('source', 'Inconnue') for meta in results.get('metadatas', [[]])[0]]
-    distances = results.get('distances', [[]])[0]
-    
-    # 3. Construire le prompt spécialisé pour la détection de fake news
-    context_string = "\n\n---\n\n".join(context_chunks)
-    
-    prompt = f"""You are a climate science fact-checker. Based ONLY on the provided scientific sources (IPCC reports, Environmental Defense Fund), analyze the following claim:
+Your output must be structured in the following format:
+1.  **VERDICT:** [Choose ONE: Factual and Credible / Mostly Factual with some bias / Misleading and Speculative / Disinformation or Hoax]
+2.  **CONFIDENCE:** [High / Medium / Low]
+3.  **ARTICLE SUMMARY:** [Briefly summarize the main argument of the article in 2-3 sentences.]
+4.  **FACT-CHECK ANALYSIS:** [Provide a point-by-point analysis. Compare the article's claims to the provided scientific context. If the article is misleading or false, explain exactly why, citing the scientific context.]"""
 
-CLAIM TO ANALYZE: "{claim}"
-
-SCIENTIFIC SOURCES:
+    user_prompt = f"""**SCIENTIFIC CONTEXT:**
 ---
 {context_string}
 ---
+**ARTICLE TO ANALYZE:**
+---
+{article['text']}
+---
 
-Provide a fact-check analysis in the following format:
-1. VERDICT: [TRUE/FALSE/PARTIALLY TRUE/INSUFFICIENT DATA]
-2. CONFIDENCE: [HIGH/MEDIUM/LOW]
-3. EXPLANATION: Brief explanation based on the scientific sources
-4. SOURCES: Which sources support your verdict
+Provide your fact-check analysis based on the instructions."""
 
-Be precise and cite specific scientific evidence. If the claim contradicts established science, clearly explain why.
+    prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{user_prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
 
-    print("\n  -> Analyse en cours par l'IA...")
+    print("  -> L'IA analyse l'article... (cela peut prendre un moment)")
 
-    # 4. Générer l'analyse avec le LLM
-    if llm_model:
-        try:
-            output = llm_model(
-                prompt,
-                max_tokens=500,
-                stop=["CLAIM TO ANALYZE:", "\n\n---", "SCIENTIFIC SOURCES:"],
-                echo=False,
-                temperature=0.2  # Plus déterministe pour les fact-checks
-            )
-            analysis = output['choices'][0]['text'].strip()
-            
-            # Ajouter les métadonnées des sources
-            sources_info = "\n\n**Sources consultées:**\n"
-            for src, dist in zip(sources, distances):
-                sources_info += f"- {src} (pertinence: {(1-dist)*100:.1f}%)\n"
-            
-            return analysis + sources_info
-
-        except Exception as e:
-            print(f"  -> Erreur lors de l'analyse: {e}")
-            return "Erreur lors de l'analyse par l'IA."
-    else:
-        # Version de secours sans LLM
-        return f"🔍 **SOURCES TROUVÉES** (LLM non disponible):\n\n{context_string}\n\n**Sources:** {', '.join(set(sources))}"
-
-
-# --- Fonction pour gérer une requête RAG (adaptée pour LLM local) ---
-
-def answer_query_rag(query: str):
-    """
-    Prend une question, trouve le contexte pertinent dans ChromaDB,
-    et génère une réponse en utilisant le LLM local configuré.
-    """
-    print(f"\nTraitement de la question: '{query}'")
-
-    # 1. Créer l'embedding de la question (inchangé)
-    print("  -> Création de l'embedding pour la question...")
+    # 3. Générer l'analyse avec le LLM
     try:
-        # Utiliser le même device que pour le chargement du modèle d'embedding
-        query_embedding = embedding_model.encode(query, device=device_embed).tolist()
-        print("  -> Embedding de la question créé.")
-    except Exception as e:
-        print(f"  -> Erreur lors de la création de l'embedding de la question: {e}")
-        return "Désolé, je n'ai pas pu traiter votre question (erreur d'embedding)."
-
-    # 2. Interroger ChromaDB pour trouver les chunks pertinents (inchangé)
-    print(f"  -> Recherche des {NUM_RESULTS_TO_RETRIEVE} chunks pertinents dans ChromaDB...")
-    try:
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=NUM_RESULTS_TO_RETRIEVE,
-            include=['documents', 'metadatas', 'distances']
+        output = llm_model(
+            prompt,
+            max_tokens=800,
+            # MODIFICATION: Utiliser le stop token de Llama 3
+            stop=["<|eot_id|>", "<|end_of_text|>"],
+            temperature=0.1,  # Très déterministe pour le fact-checking
+            echo=False
         )
-        print(f"  -> Recherche terminée. Trouvé {len(results.get('ids', [[]])[0])} résultat(s).")
+        analysis = output['choices'][0]['text'].strip()
+        return analysis
+
     except Exception as e:
-        print(f"  -> Erreur lors de la recherche dans ChromaDB: {e}")
-        return "Désolé, je n'ai pas pu rechercher les informations pertinentes (erreur base de données)."
-
-    context_chunks = results.get('documents', [[]])[0]
-    if not context_chunks:
-        print("  -> Aucun chunk pertinent trouvé dans la base de données.")
-        return "Désolé, je n'ai trouvé aucune information pertinente dans ma base de connaissances pour répondre à votre question."
-
-    sources = [meta.get('source', 'Inconnue') for meta in results.get('metadatas', [[]])[0]]
-    distances = results.get('distances', [[]])[0]
-    print("  -> Sources récupérées (distances):")
-    for src, dist in zip(sources, distances):
-        print(f"    - {src} (distance: {dist:.4f})")
-
-    # 3. Construire le prompt pour le LLM (potentiellement à adapter au format du modèle)
-    context_string = "\n\n---\n\n".join(context_chunks)
-
-    # *** MODIFICATION: Prompt en Anglais ***
-    # Simple English prompt format often suitable for Instruct GGUF models.
-    # Some models might prefer specific formats (Alpaca, ChatML...).
-    # Check the model's page on Hugging Face if needed.
-    prompt = f"""Context:
----
-{context_string}
----
-Question: {query}
-
-Answer based solely on the provided context:
-"""
-    # *** Fin de la modification ***
-
-    print("\n  -> Prompt construit pour le LLM local (début):")
-    print(prompt[:500] + "...")
-
-    # 4. Générer la réponse avec le LLM local (si chargé)
-    if llm_model:
-        print("\n  -> Envoi de la requête au LLM local...")
-        try:
-            # Appel à llama-cpp-python pour la génération
-            output = llm_model(
-                prompt,
-                max_tokens=300,  # Limite le nombre de tokens générés pour la réponse
-                stop=["Question:", "\n", "Context:"], # Arrête la génération si le modèle commence à poser une autre question, saute une ligne ou répète le contexte
-                echo=False      # Ne répète pas le prompt dans la sortie
-            )
-            # Extraire le texte de la réponse
-            final_answer = output['choices'][0]['text'].strip()
-            print("  -> Réponse reçue du LLM local.")
-            return final_answer
-
-        except Exception as e:
-            print(f"  -> Erreur lors de la génération de la réponse par le LLM local: {e}")
-            return "Désolé, une erreur s'est produite lors de la génération de la réponse par l'IA locale."
-    else:
-        print("\n  -> Le LLM local n'est pas chargé. Retour du contexte brut.")
-        return f"Le LLM local n'est pas disponible. Voici le contexte trouvé:\n\n{context_string}"
+        print(f"  -> Erreur lors de l'analyse par l'IA: {e}")
+        return "Erreur lors de la génération de la réponse par l'IA."
 
 
-# --- Boucle Principale pour poser des questions (inchangée) ---
+# --- Boucle Principale Modifiée ---
 
 if __name__ == "__main__":
-    print("\n" + "="*60)
-    print("🌍 SYSTÈME DE DÉTECTION DE FAKE NEWS CLIMATIQUES")
-    print("Basé sur les sources: IPCC, Environmental Defense Fund")
-    print("="*60)
-    print("\nCommandes disponibles:")
-    print("- 'analyze: [affirmation]' : Analyser une affirmation climatique")
-    print("- 'question: [question]' : Poser une question générale sur le climat")
-    print("- 'quit' ou 'exit' : Quitter")
-    print("="*60)
+    # Charger les articles une seule fois au démarrage
+    articles = load_and_split_articles(PDF_PATH)
+
+    if not articles:
+        print("Impossible de continuer sans articles à analyser. Fin du programme.")
+        exit()
 
     while True:
-        user_input = input("\nVotre entrée: ")
+        print("\n" + "=" * 60)
+        print("📰 LISTE DES ARTICLES DISPONIBLES")
+        print("=" * 60)
+        for article in articles:
+            print(f"  {article['number']}: {article['title']}")
+        print("=" * 60)
+        print("Entrez le numéro de l'article à analyser, ou 'quit' pour quitter.")
+
+        user_input = input("\nVotre choix: ")
+
         if user_input.lower() in ['quit', 'exit']:
             break
-        if not user_input.strip():
-            continue
 
-        # Déterminer le type de requête
-        if user_input.lower().startswith('analyze:'):
-            claim = user_input[8:].strip()  # Supprimer 'analyze:'
-            if claim:
-                analysis = analyze_climate_claim(claim)
-                print("\n" + "="*50)
-                print("📊 ANALYSE DE L'AFFIRMATION")
-                print("="*50)
-                print(analysis)
-                print("="*50)
-            else:
-                print("Veuillez fournir une affirmation à analyser après 'analyze:'")
-                
-        elif user_input.lower().startswith('question:'):
-            question = user_input[9:].strip()  # Supprimer 'question:'
-            if question:
-                answer = answer_query_rag(question)
-                print("\n" + "="*50)
-                print("💬 RÉPONSE")
-                print("="*50)
-                print(answer)
-                print("="*50)
-            else:
-                print("Veuillez fournir une question après 'question:'")
-        else:
-            # Par défaut, traiter comme une analyse de fake news
-            analysis = analyze_climate_claim(user_input)
-            print("\n" + "="*50)
-            print("📊 ANALYSE DE L'AFFIRMATION")
-            print("="*50)
-            print(analysis)
-            print("="*50)
+        try:
+            choice = int(user_input)
+            selected_article = next((a for a in articles if a['number'] == choice), None)
 
-    print("\n🌍 Merci d'avoir utilisé le détecteur de fake news climatiques !")
+            if selected_article:
+                analysis_result = analyze_article(selected_article)
+                print("\n" + "#" * 60)
+                print(f"🔎 RÉSULTAT DE L'ANALYSE - ARTICLE {selected_article['number']}")
+                print("#" * 60)
+                print(analysis_result)
+                print("#" * 60)
+            else:
+                print(f"Erreur: Le numéro d'article '{choice}' n'est pas valide.")
+
+        except ValueError:
+            print("Erreur: Veuillez entrer un numéro valide.")
+        except Exception as e:
+            print(f"Une erreur inattendue est survenue: {e}")
+
+    print("\n🌍 Fin du programme de fact-checking.")
