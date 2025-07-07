@@ -7,16 +7,30 @@ import xml.etree.ElementTree as ET
 from urllib.parse import urlparse, urljoin
 
 # --- Configuration ---
-# Adaptez ceci si vous ciblez la version française explicitement
-BASE_URL = "https://minecraft.wiki"
-# Trouvez l'URL du sitemap dans le fichier robots.txt
-SITEMAP_INDEX_URL = "https://minecraft.wiki/images/sitemaps/index.xml"
+# Sources fiables pour le fact-checking climatique
+CLIMATE_SOURCES = {
+    "IPCC": {
+        "base_url": "https://www.ipcc.ch",
+        "report_urls": [
+            "https://www.ipcc.ch/report/ar6/wg1/",  # AR6 Working Group I
+            "https://www.ipcc.ch/report/ar6/wg2/",  # AR6 Working Group II  
+            "https://www.ipcc.ch/report/ar6/wg3/",  # AR6 Working Group III
+            "https://www.ipcc.ch/srocc/",           # Special Report Ocean/Cryosphere
+            "https://www.ipcc.ch/sr15/",            # Special Report 1.5°C
+        ]
+    },
+    "EDF": {
+        "base_url": "https://www.edf.org",
+        "climate_section": "https://www.edf.org/climate"
+    }
+}
+
 # *** IMPORTANT: Personnalisez ce User-Agent ! ***
-USER_AGENT = "BotScrapingWikiMinecraftForPersonnaluse (Personnal use ; contact: bennostal@gmail.com)"
+USER_AGENT = "ClimateFactCheckBot/1.0 (Educational research; contact: votre-email@exemple.com)"
 # Délai en secondes entre les requêtes pour être respectueux
-DELAY_BETWEEN_REQUESTS = 2
+DELAY_BETWEEN_REQUESTS = 3  # Plus conservateur pour des sites institutionnels
 # Dossier où sauvegarder les fichiers texte extraits
-OUTPUT_DIR = "wiki_content"
+OUTPUT_DIR = "climate_facts_content"
 # *** TRÈS IMPORTANT: Trouvez le bon sélecteur CSS pour la zone de contenu principal ***
 # Inspectez une page article du wiki avec les outils de développement (F12)
 # Cherchez le conteneur principal du texte (souvent <main>, <article>, ou une div avec un ID/classe spécifique)

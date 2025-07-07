@@ -9,13 +9,13 @@ from llama_cpp import Llama
 
 # --- Configuration ---
 # Chemin vers le dossier de la base ChromaDB persistante
-PERSIST_DIRECTORY = "chroma_db_minecraft"
+PERSIST_DIRECTORY = "chroma_db_climate_facts"
 # Nom de la collection dans ChromaDB
-COLLECTION_NAME = "minecraft_wiki_chunks"
+COLLECTION_NAME = "climate_facts_chunks"
 # Nom du modèle d'embedding (DOIT être le même que celui utilisé pour créer les embeddings)
 MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
 # Nombre de chunks pertinents à récupérer de ChromaDB
-NUM_RESULTS_TO_RETRIEVE = 3 # Vous pouvez ajuster ce nombre
+NUM_RESULTS_TO_RETRIEVE = 5 # Plus de contexte pour l'analyse des fake news
 
 # --- Configuration du LLM Local (llama-cpp-python) ---
 # *** MODIFIEZ CECI: Chemin vers votre fichier modèle GGUF téléchargé ***
@@ -77,6 +77,92 @@ else:
         print(f"Erreur lors du chargement du modèle LLM local: {e}")
         print("Vérifiez le chemin du modèle, les paramètres (n_gpu_layers) et l'installation de llama-cpp-python avec support GPU.")
         # Le script continuera sans LLM si le chargement échoue
+
+def analyze_climate_claim(claim: str):
+    """
+    Analyse une affirmation sur le climat pour détecter les fake news.
+    Retourne une évaluation basée sur les sources scientifiques fiables.
+    """
+    print(f"\nAnalyse de l'affirmation: '{claim}'")
+
+    # 1. Créer l'embedding de l'affirmation
+    print("  -> Création de l'embedding pour l'affirmation...")
+    try:
+        claim_embedding = embedding_model.encode(claim, device=device_embed).tolist()
+        print("  -> Embedding de l'affirmation créé.")
+    except Exception as e:
+        print(f"  -> Erreur lors de la création de l'embedding: {e}")
+        return "Impossible d'analyser cette affirmation (erreur technique)."
+
+    # 2. Rechercher dans les sources scientifiques fiables
+    print(f"  -> Recherche dans les sources scientifiques fiables...")
+    try:
+        results = collection.query(
+            query_embeddings=[claim_embedding],
+            n_results=NUM_RESULTS_TO_RETRIEVE,
+            include=['documents', 'metadatas', 'distances']
+        )
+        print(f"  -> Trouvé {len(results.get('ids', [[]])[0])} source(s) pertinente(s).")
+    except Exception as e:
+        print(f"  -> Erreur lors de la recherche: {e}")
+        return "Impossible d'accéder aux sources scientifiques (erreur base de données)."
+
+    context_chunks = results.get('documents', [[]])[0]
+    if not context_chunks:
+        return "❓ **INFORMATION INSUFFISANTE** - Aucune source scientifique fiable trouvée pour évaluer cette affirmation."
+
+    sources = [meta.get('source', 'Inconnue') for meta in results.get('metadatas', [[]])[0]]
+    distances = results.get('distances', [[]])[0]
+    
+    # 3. Construire le prompt spécialisé pour la détection de fake news
+    context_string = "\n\n---\n\n".join(context_chunks)
+    
+    prompt = f"""You are a climate science fact-checker. Based ONLY on the provided scientific sources (IPCC reports, Environmental Defense Fund), analyze the following claim:
+
+CLAIM TO ANALYZE: "{claim}"
+
+SCIENTIFIC SOURCES:
+---
+{context_string}
+---
+
+Provide a fact-check analysis in the following format:
+1. VERDICT: [TRUE/FALSE/PARTIALLY TRUE/INSUFFICIENT DATA]
+2. CONFIDENCE: [HIGH/MEDIUM/LOW]
+3. EXPLANATION: Brief explanation based on the scientific sources
+4. SOURCES: Which sources support your verdict
+
+Be precise and cite specific scientific evidence. If the claim contradicts established science, clearly explain why.
+"""
+
+    print("\n  -> Analyse en cours par l'IA...")
+
+    # 4. Générer l'analyse avec le LLM
+    if llm_model:
+        try:
+            output = llm_model(
+                prompt,
+                max_tokens=500,
+                stop=["CLAIM TO ANALYZE:", "\n\n---", "SCIENTIFIC SOURCES:"],
+                echo=False,
+                temperature=0.2  # Plus déterministe pour les fact-checks
+            )
+            analysis = output['choices'][0]['text'].strip()
+            
+            # Ajouter les métadonnées des sources
+            sources_info = "\n\n**Sources consultées:**\n"
+            for src, dist in zip(sources, distances):
+                sources_info += f"- {src} (pertinence: {(1-dist)*100:.1f}%)\n"
+            
+            return analysis + sources_info
+
+        except Exception as e:
+            print(f"  -> Erreur lors de l'analyse: {e}")
+            return "Erreur lors de l'analyse par l'IA."
+    else:
+        # Version de secours sans LLM
+        return f"🔍 **SOURCES TROUVÉES** (LLM non disponible):\n\n{context_string}\n\n**Sources:** {', '.join(set(sources))}"
+
 
 # --- Fonction pour gérer une requête RAG (adaptée pour LLM local) ---
 
@@ -168,24 +254,54 @@ Answer based solely on the provided context:
 # --- Boucle Principale pour poser des questions (inchangée) ---
 
 if __name__ == "__main__":
-    print("\n" + "="*50)
-    print("Système RAG Minecraft (LLM Local) prêt à répondre.")
-    print("Tapez 'quit' ou 'exit' pour quitter.")
-    print("="*50)
+    print("\n" + "="*60)
+    print("🌍 SYSTÈME DE DÉTECTION DE FAKE NEWS CLIMATIQUES")
+    print("Basé sur les sources: IPCC, Environmental Defense Fund")
+    print("="*60)
+    print("\nCommandes disponibles:")
+    print("- 'analyze: [affirmation]' : Analyser une affirmation climatique")
+    print("- 'question: [question]' : Poser une question générale sur le climat")
+    print("- 'quit' ou 'exit' : Quitter")
+    print("="*60)
 
     while True:
-        user_query = input("\nVotre question sur Minecraft: ")
-        if user_query.lower() in ['quit', 'exit']:
+        user_input = input("\nVotre entrée: ")
+        if user_input.lower() in ['quit', 'exit']:
             break
-        if not user_query.strip():
+        if not user_input.strip():
             continue
 
-        # Obtenir la réponse via le processus RAG
-        answer = answer_query_rag(user_query)
+        # Déterminer le type de requête
+        if user_input.lower().startswith('analyze:'):
+            claim = user_input[8:].strip()  # Supprimer 'analyze:'
+            if claim:
+                analysis = analyze_climate_claim(claim)
+                print("\n" + "="*50)
+                print("📊 ANALYSE DE L'AFFIRMATION")
+                print("="*50)
+                print(analysis)
+                print("="*50)
+            else:
+                print("Veuillez fournir une affirmation à analyser après 'analyze:'")
+                
+        elif user_input.lower().startswith('question:'):
+            question = user_input[9:].strip()  # Supprimer 'question:'
+            if question:
+                answer = answer_query_rag(question)
+                print("\n" + "="*50)
+                print("💬 RÉPONSE")
+                print("="*50)
+                print(answer)
+                print("="*50)
+            else:
+                print("Veuillez fournir une question après 'question:'")
+        else:
+            # Par défaut, traiter comme une analyse de fake news
+            analysis = analyze_climate_claim(user_input)
+            print("\n" + "="*50)
+            print("📊 ANALYSE DE L'AFFIRMATION")
+            print("="*50)
+            print(analysis)
+            print("="*50)
 
-        print("\nRéponse de l'Assistant:")
-        print("-"*30)
-        print(answer)
-        print("-"*30)
-
-    print("\nAu revoir !")
+    print("\n🌍 Merci d'avoir utilisé le détecteur de fake news climatiques !")

@@ -175,3 +175,28 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Climate RAG specific files
+# Raw data
+climate_pdfs/
+climate_pdfs_quality/
+climate_facts_content/
+climate_facts_content_from_pdfs/
+climate_facts_content_from_pdfs_backup/
+climate_facts_content_clean/
+climate_facts_content_structured/
+
+# Processed data
+*.json
+climate_chunks_data.json
+climate_embeddings_data.json
+
+# Vector database
+chroma_db_*/
+chroma_db_climate_facts/
+chroma_db_minecraft/
+
+# Large model files
+*.gguf
+*.bin
+*.safetensors

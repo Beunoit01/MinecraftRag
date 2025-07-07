@@ -5,11 +5,11 @@ from chromadb.utils import embedding_functions # Pour utiliser les embeddings pr
 
 # --- Configuration ---
 # Fichier contenant les chunks et leurs embeddings pré-calculés
-INPUT_EMBEDDINGS_FILE = "embeddings_data.json"
+INPUT_EMBEDDINGS_FILE = "climate_embeddings_data.json"
 # Dossier où ChromaDB stockera ses fichiers (index, etc.)
-PERSIST_DIRECTORY = "chroma_db_minecraft"
+PERSIST_DIRECTORY = "chroma_db_climate_facts"
 # Nom de la collection dans ChromaDB (comme une table dans une BDD SQL)
-COLLECTION_NAME = "minecraft_wiki_chunks"
+COLLECTION_NAME = "climate_facts_chunks"
 
 # --- Chargement des données pré-calculées ---
 print(f"Chargement des données depuis '{INPUT_EMBEDDINGS_FILE}'...")
