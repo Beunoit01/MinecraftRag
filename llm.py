@@ -9,7 +9,7 @@ import fitz
 PERSIST_DIRECTORY = "chroma_db_climate_facts"
 COLLECTION_NAME = "climate_facts_chunks"
 MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
-NUM_RESULTS_TO_RETRIEVE = 7
+NUM_RESULTS_TO_RETRIEVE = 8
 PDF_PATH = "climate_articles.pdf"
 ANALYSIS_OUTPUT_DIR = "result"
 
@@ -83,7 +83,7 @@ Your output must be structured in the following format:
 1.  **VERDICT:** [Choose ONE: Factual and Credible / Disinformation or Hoax]
 2.  **CONFIDENCE:** [High / Medium / Low]
 3.  **ARTICLE SUMMARY:** [Briefly summarize the main argument of the article in 2-3 sentences.]
-4.  **FACT-CHECK ANALYSIS:** [Provide a point-by-point analysis. Compare the article's claims to the provided scientific context. If the article is misleading or false, explain exactly why, citing the scientific context.]"""
+4.  **FACT-CHECK ANALYSIS:** [Provide a point-by-point analysis. Compare the article's claims to the provided scientific context. If the article is misleading or false, explain why. **If the verdict is 'INSUFFICIENT DATA TO VERIFY', explain which claims could not be verified against the provided context.**]"""
     user_prompt = f"""**SCIENTIFIC CONTEXT:**
 ---
 {context_string}
