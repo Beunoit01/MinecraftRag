@@ -200,3 +200,7 @@ chroma_db_minecraft/
 *.gguf
 *.bin
 *.safetensors
+
+# Vie Quotidienne specific
+models/
+.env
