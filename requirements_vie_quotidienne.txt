@@ -1,0 +1,15 @@
+# Requirements pour l'application Vie Quotidienne
+# Installation: pip install -r requirements_vie_quotidienne.txt
+
+# Base de données PostgreSQL
+psycopg2-binary>=2.9.0
+
+# LLM local (llama-cpp-python)
+llama-cpp-python>=0.2.0
+
+# Utilitaires (optionnels mais recommandés)
+python-dotenv>=1.0.0  # Pour charger les variables d'environnement depuis .env
+
+# Si vous voulez ajouter des embeddings pour la recherche sémantique (optionnel)
+# sentence-transformers>=2.0.0
+# chromadb>=0.4.0
